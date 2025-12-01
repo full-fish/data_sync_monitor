@@ -41,7 +41,7 @@ except:
     noti_ready = False
     st.sidebar.warning("Notification config missing.")
 
-st.title("Network Node Monitor v1.3")
+st.title("Network Node Monitor v1.4")
 st.caption("Real-time data synchronization dashboard")
 
 # 입력 UI
@@ -124,10 +124,9 @@ interval_range = st.slider(
 
 # --- 메인 로직 ---
 async def process_data_stream():
-    # UI 구역 나누기
-    status_header = st.empty()  # 상태 메시지 (몇 번째 루프)
-    monitor_area = st.empty()  #
-    status_detail = st.empty()  # 현재 동작 (대기중/예약중)
+    status_header = st.empty()
+    monitor_area = st.empty()
+    status_detail = st.empty()
 
     if not user_id or not user_pw:
         st.error("Check credentials.")
@@ -142,9 +141,13 @@ async def process_data_stream():
 
     if noti_ready:
         bot = telegram.Bot(token=bot_token)
-        await bot.sendMessage(
-            chat_id=chat_id, text=f"System: Monitoring Started [{src_node}->{dst_node}]"
+
+        start_msg = (
+            f"📡 System: Monitoring Started\n"
+            f"👤 User: {user_id}\n"
+            f"🛤 Route: [{src_node} -> {dst_node}]"
         )
+        await bot.sendMessage(chat_id=chat_id, text=start_msg)
 
     st.button("Stop Process (Refresh Page)")
 
@@ -158,7 +161,6 @@ async def process_data_stream():
         status_header.info(f"🔄 Sync Loop: #{loop_count}")
 
         try:
-            # 1. 리스트 갱신 (새로고침)
             items = client.search_train(
                 src_node,
                 dst_node,
@@ -168,7 +170,6 @@ async def process_data_stream():
                 available_only=False,
             )
 
-            # 2. [NEW] 화면에 현재 스캔 중인 리스트 출력
             log_text = f"timestamp: {datetime.now().strftime('%H:%M:%S')} | total_packets: {len(items)}\n"
             log_text += "-" * 50 + "\n"
             log_text += "   TIME   |   ID   |    STATUS    \n"
@@ -178,21 +179,16 @@ async def process_data_stream():
 
             for item in items:
                 is_available = "예약가능" in str(item)
-
-                # 로그 텍스트 생성 (Available -> ACTIVE, Sold Out -> BUSY)
                 status_str = "🟢 ACTIVE" if is_available else "🔴 BUSY  "
                 log_text += (
                     f" {item.dep_time}  | {item.train_number:^6} | {status_str}\n"
                 )
 
-                # 예약 대상 찾기 (첫 번째로 발견된 예약가능 열차)
                 if is_available and target_item is None:
                     target_item = item
 
-            # 화면 업데이트 (리스트 쫙 보여주기)
             monitor_area.code(log_text, language="yaml")
 
-            # 3. 예약 시도 혹은 대기
             if target_item:
                 status_detail.write(
                     f"🔍 Target Detected [ID:{target_item.train_number}]! Acquiring..."
@@ -201,7 +197,11 @@ async def process_data_stream():
                 result = client.reserve(target_item, special_seat=selected_config)
 
                 if result:
-                    success_msg = f"Target Acquired! [ID:{target_item.train_number}] {target_item.dep_time}"
+                    success_msg = (
+                        f"🎉 Target Acquired!\n"
+                        f"👤 User: {user_id}\n"  # 성공했을 때도 ID 한번 더 알려줌
+                        f"🚆 Train: {target_item.train_number} ({target_item.dep_time})"
+                    )
                     st.balloons()
                     st.success(success_msg)
 
@@ -209,13 +209,12 @@ async def process_data_stream():
                         await bot.sendMessage(chat_id=chat_id, text=success_msg)
                         await bot.sendMessage(
                             chat_id=chat_id,
-                            text=f"Ref Code: {result.reservation_number}",
+                            text=f"🎫 Ref Code: {result.reservation_number}",
                         )
 
                     flag = True
                     break
             else:
-                # 대기
                 min_sec = interval_range[0]
                 max_sec = interval_range[1]
                 sleep_time = random.uniform(min_sec, max_sec)
