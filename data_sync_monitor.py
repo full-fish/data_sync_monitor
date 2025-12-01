@@ -6,7 +6,7 @@ import asyncio
 import random
 from datetime import datetime
 
-# --- 비밀번호 잠금 기능 (st.rerun 삭제 버전) ---
+# --- 비밀번호 잠금 기능 ---
 if "password_correct" not in st.session_state:
 
     def check_password():
@@ -14,7 +14,7 @@ if "password_correct" not in st.session_state:
             st.session_state.password_correct = True
             del st.session_state.password_input
         else:
-            st.error("비밀번호가 틀렸습니다.")
+            st.error("Access Denied.")
 
     st.title("🔐 Access Restricted")
     st.caption("Enter access key.")
@@ -23,7 +23,7 @@ if "password_correct" not in st.session_state:
     )
     st.stop()
 
-# --- 메인 앱 시작 ---
+# --- 메인 앱 설정 ---
 st.set_page_config(page_title="Data Monitor", page_icon="📊")
 
 st.sidebar.header("System Access")
@@ -41,9 +41,10 @@ except:
     noti_ready = False
     st.sidebar.warning("Notification config missing.")
 
-st.title("Network Node Monitor v1.2")
+st.title("Network Node Monitor v1.3")
 st.caption("Real-time data synchronization dashboard")
 
+# 입력 UI
 col1, col2 = st.columns(2)
 with col1:
     node_list = [
@@ -121,12 +122,12 @@ interval_range = st.slider(
 )
 
 
+# --- 메인 로직 ---
 async def process_data_stream():
-    status_header = st.empty()
-    status_detail = st.empty()
-    log_area = (
-        st.empty()
-    )  # 로그를 쌓아서 보여주기 위해 empty 대신 container 쓰거나 덮어쓰기
+    # UI 구역 나누기
+    status_header = st.empty()  # 상태 메시지 (몇 번째 루프)
+    monitor_area = st.empty()  #
+    status_detail = st.empty()  # 현재 동작 (대기중/예약중)
 
     if not user_id or not user_pw:
         st.error("Check credentials.")
@@ -139,7 +140,6 @@ async def process_data_stream():
         st.error(f"Connection Failed: {e}")
         return
 
-    # 봇 알림
     if noti_ready:
         bot = telegram.Bot(token=bot_token)
         await bot.sendMessage(
@@ -158,7 +158,7 @@ async def process_data_stream():
         status_header.info(f"🔄 Sync Loop: #{loop_count}")
 
         try:
-            # [핵심 수정] search_train을 루프 안으로 이동 -> 매번 새로고침!
+            # 1. 리스트 갱신 (새로고침)
             items = client.search_train(
                 src_node,
                 dst_node,
@@ -168,24 +168,36 @@ async def process_data_stream():
                 available_only=False,
             )
 
-            # 검색 결과 중 '예약가능' 상태인 것만 필터링
+            # 2. [NEW] 화면에 현재 스캔 중인 리스트 출력
+            log_text = f"timestamp: {datetime.now().strftime('%H:%M:%S')} | total_packets: {len(items)}\n"
+            log_text += "-" * 50 + "\n"
+            log_text += "   TIME   |   ID   |    STATUS    \n"
+            log_text += "-" * 50 + "\n"
+
             target_item = None
+
             for item in items:
-                # 위장: 화면에는 안 보이지만 내부적으로 "예약가능" 텍스트 체크
-                if "예약가능" in str(item):
-                    target_item = item
-                    break
+                is_available = "예약가능" in str(item)
 
-            # 화면 로그 갱신
-            current_time = datetime.now().strftime("%H:%M:%S")
-
-            if target_item:
-                # 찾았다!
-                status_detail.write(
-                    f"🔍 [{current_time}] Target Detected [ID:{target_item.train_number}]! Acquiring..."
+                # 로그 텍스트 생성 (Available -> ACTIVE, Sold Out -> BUSY)
+                status_str = "🟢 ACTIVE" if is_available else "🔴 BUSY  "
+                log_text += (
+                    f" {item.dep_time}  | {item.train_number:^6} | {status_str}\n"
                 )
 
-                # 예약 시도
+                # 예약 대상 찾기 (첫 번째로 발견된 예약가능 열차)
+                if is_available and target_item is None:
+                    target_item = item
+
+            # 화면 업데이트 (리스트 쫙 보여주기)
+            monitor_area.code(log_text, language="yaml")
+
+            # 3. 예약 시도 혹은 대기
+            if target_item:
+                status_detail.write(
+                    f"🔍 Target Detected [ID:{target_item.train_number}]! Acquiring..."
+                )
+
                 result = client.reserve(target_item, special_seat=selected_config)
 
                 if result:
@@ -203,12 +215,7 @@ async def process_data_stream():
                     flag = True
                     break
             else:
-                # 못 찾음 -> 대기
-                # 로그가 너무 빨리 바뀌면 안보이니까 caption으로 상태 표시
-                log_area.caption(
-                    f"[{current_time}] Scanned {len(items)} items. No packet available. Idle..."
-                )
-
+                # 대기
                 min_sec = interval_range[0]
                 max_sec = interval_range[1]
                 sleep_time = random.uniform(min_sec, max_sec)
