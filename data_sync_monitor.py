@@ -7,28 +7,25 @@ import random
 from datetime import datetime
 
 if "password_correct" not in st.session_state:
-    
+
     def check_password():
         # Secrets에 저장된 앱 비밀번호와 사용자가 입력한 값 비교
         if st.session_state.password_input == st.secrets["APP_PASSWORD"]:
             st.session_state.password_correct = True
             del st.session_state.password_input  # 비밀번호는 세션에 남기지 않음
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("비밀번호가 틀렸습니다. 지인에게 문의하세요.")
 
     st.title("🔐 Access Restricted")
     st.caption("Please enter the shared access key to continue.")
-    
+
     st.text_input(
-        "Access Key",
-        type="password",
-        on_change=check_password,
-        key="password_input"
+        "Access Key", type="password", on_change=check_password, key="password_input"
     )
-    
-    st.stop() # 이 명령어 아래의 모든 코드는 실행되지 않습니다.
-    
+
+    st.stop()  # 이 명령어 아래의 모든 코드는 실행되지 않습니다.
+
 st.set_page_config(page_title="Data Monitor", page_icon="📊")
 
 st.sidebar.header("System Access")
