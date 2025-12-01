@@ -13,7 +13,6 @@ if "password_correct" not in st.session_state:
         if st.session_state.password_input == st.secrets["APP_PASSWORD"]:
             st.session_state.password_correct = True
             del st.session_state.password_input  # 비밀번호는 세션에 남기지 않음
-            st.rerun()
         else:
             st.error("비밀번호가 틀렸습니다. 지인에게 문의하세요.")
 
