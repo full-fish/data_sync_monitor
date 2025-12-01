@@ -6,29 +6,27 @@ import asyncio
 import random
 from datetime import datetime
 
+# --- 비밀번호 잠금 기능 (st.rerun 삭제 버전) ---
 if "password_correct" not in st.session_state:
 
     def check_password():
-        # Secrets에 저장된 앱 비밀번호와 사용자가 입력한 값 비교
         if st.session_state.password_input == st.secrets["APP_PASSWORD"]:
             st.session_state.password_correct = True
-            del st.session_state.password_input  # 비밀번호는 세션에 남기지 않음
+            del st.session_state.password_input
         else:
-            st.error("비밀번호가 틀렸습니다. 지인에게 문의하세요.")
+            st.error("비밀번호가 틀렸습니다.")
 
     st.title("🔐 Access Restricted")
-    st.caption("Please enter the shared access key to continue.")
-
+    st.caption("Enter access key.")
     st.text_input(
         "Access Key", type="password", on_change=check_password, key="password_input"
     )
+    st.stop()
 
-    st.stop()  # 이 명령어 아래의 모든 코드는 실행되지 않습니다.
-
+# --- 메인 앱 시작 ---
 st.set_page_config(page_title="Data Monitor", page_icon="📊")
 
 st.sidebar.header("System Access")
-
 default_uid = st.secrets["SRT"]["USER_ID"] if "SRT" in st.secrets else ""
 default_upw = st.secrets["SRT"]["USER_PASS"] if "SRT" in st.secrets else ""
 
@@ -43,7 +41,7 @@ except:
     noti_ready = False
     st.sidebar.warning("Notification config missing.")
 
-st.title("Network Node Monitor v1.0")
+st.title("Network Node Monitor v1.2")
 st.caption("Real-time data synchronization dashboard")
 
 col1, col2 = st.columns(2)
@@ -119,117 +117,111 @@ selected_config = type_map[config_choice]
 
 st.write("Request Interval Settings (sec)")
 interval_range = st.slider(
-    "Set random interval for stability", min_value=1, max_value=300, value=(30, 60)
+    "Set random interval for stability", min_value=1, max_value=300, value=(3, 6)
 )
 
 
 async def process_data_stream():
     status_header = st.empty()
     status_detail = st.empty()
-    log_area = st.empty()
+    log_area = (
+        st.empty()
+    )  # 로그를 쌓아서 보여주기 위해 empty 대신 container 쓰거나 덮어쓰기
 
     if not user_id or not user_pw:
-        st.error("Access denied. Please check credentials.")
+        st.error("Check credentials.")
         return
 
     try:
         client = Client(user_id, user_pw)
-        status_header.info("Connection Established. Scanning packets...")
+        status_header.info("Connection Established.")
     except Exception as e:
         st.error(f"Connection Failed: {e}")
         return
 
-    try:
-        items = client.search_train(
-            src_node,
-            dst_node,
-            date_str,
-            start_time_str,
-            time_limit=end_time_str,
-            available_only=False,
+    # 봇 알림
+    if noti_ready:
+        bot = telegram.Bot(token=bot_token)
+        await bot.sendMessage(
+            chat_id=chat_id, text=f"System: Monitoring Started [{src_node}->{dst_node}]"
         )
 
-        st.write(f"Monitor Range: {time_display[start_idx]} ~ {time_display[end_idx]}")
-        st.write(f"Detected Items: {len(items)}")
+    st.button("Stop Process (Refresh Page)")
 
-        item_list_text = ""
-        for item in items:
-            item_list_text += (
-                f"[ID:{item.train_number}] {item.dep_time}~{item.arr_time}\n"
+    flag = False
+    loop_count = 0
+
+    status_header.success("Data Sync Active...")
+
+    while not flag:
+        loop_count += 1
+        status_header.info(f"🔄 Sync Loop: #{loop_count}")
+
+        try:
+            # [핵심 수정] search_train을 루프 안으로 이동 -> 매번 새로고침!
+            items = client.search_train(
+                src_node,
+                dst_node,
+                date_str,
+                start_time_str,
+                time_limit=end_time_str,
+                available_only=False,
             )
 
-        if not items:
-            st.warning("No data found in this range.")
-            return
-
-        with st.expander("Show Data List"):
-            st.text(item_list_text)
-
-        if noti_ready:
-            bot = telegram.Bot(token=bot_token)
-            await bot.sendMessage(
-                chat_id=chat_id,
-                text=f"System: Monitoring Started [{src_node}->{dst_node}] ({len(items)} items)",
-            )
-
-        st.button("Stop Process (Refresh Page)")
-
-        flag = False
-        loop_count = 0
-
-        status_header.success("Data Sync Active...")
-
-        while not flag:
-            loop_count += 1
-            status_header.info(f"🔄 Sync Loop: #{loop_count}")
-
+            # 검색 결과 중 '예약가능' 상태인 것만 필터링
+            target_item = None
             for item in items:
-                try:
-                    min_sec = interval_range[0]
-                    max_sec = interval_range[1]
-                    sleep_time = random.uniform(min_sec, max_sec)
+                # 위장: 화면에는 안 보이지만 내부적으로 "예약가능" 텍스트 체크
+                if "예약가능" in str(item):
+                    target_item = item
+                    break
 
-                    status_detail.warning(f"⏳ Idle State: {sleep_time:.1f}s")
+            # 화면 로그 갱신
+            current_time = datetime.now().strftime("%H:%M:%S")
 
-                    await asyncio.sleep(sleep_time)
+            if target_item:
+                # 찾았다!
+                status_detail.write(
+                    f"🔍 [{current_time}] Target Detected [ID:{target_item.train_number}]! Acquiring..."
+                )
 
-                    status_detail.write(
-                        f"🔍 Verifying Item [ID:{item.train_number}] {item.dep_time}..."
-                    )
+                # 예약 시도
+                result = client.reserve(target_item, special_seat=selected_config)
 
-                    result = client.reserve(item, special_seat=selected_config)
+                if result:
+                    success_msg = f"Target Acquired! [ID:{target_item.train_number}] {target_item.dep_time}"
+                    st.balloons()
+                    st.success(success_msg)
 
-                    if result:
-                        success_msg = (
-                            f"Target Acquired! [ID:{item.train_number}] {item.dep_time}"
+                    if noti_ready:
+                        await bot.sendMessage(chat_id=chat_id, text=success_msg)
+                        await bot.sendMessage(
+                            chat_id=chat_id,
+                            text=f"Ref Code: {result.reservation_number}",
                         )
-                        st.balloons()
-                        st.success(success_msg)
-                        status_detail.success("Process Completed Successfully.")
 
-                        if noti_ready:
-                            await bot.sendMessage(chat_id=chat_id, text=success_msg)
-                            await bot.sendMessage(
-                                chat_id=chat_id,
-                                text=f"Ref Code: {result.reservation_number}",
-                            )
+                    flag = True
+                    break
+            else:
+                # 못 찾음 -> 대기
+                # 로그가 너무 빨리 바뀌면 안보이니까 caption으로 상태 표시
+                log_area.caption(
+                    f"[{current_time}] Scanned {len(items)} items. No packet available. Idle..."
+                )
 
-                        flag = True
-                        break
+                min_sec = interval_range[0]
+                max_sec = interval_range[1]
+                sleep_time = random.uniform(min_sec, max_sec)
 
-                except ValueError:
-                    log_area.caption(
-                        f"[{datetime.now().strftime('%H:%M:%S')}] Item {item.dep_time} : Data Unavailable"
-                    )
-                    pass
-                except Exception as e:
-                    st.error(f"Runtime Error: {e}")
+                status_detail.warning(f"⏳ Idle State: {sleep_time:.1f}s")
+                await asyncio.sleep(sleep_time)
 
-            if flag:
-                break
+        except Exception as e:
+            st.error(f"Runtime Error: {e}")
+            await asyncio.sleep(3)
 
-    except Exception as e:
-        st.error(f"System Error: {e}")
+    if flag:
+        status_header.success("Process Completed.")
 
 
 if st.button("Start Sync Process", type="primary"):
