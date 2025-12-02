@@ -14,13 +14,29 @@ if "password_correct" not in st.session_state:
             st.session_state.password_correct = True
             del st.session_state.password_input
         else:
-            st.error("Access Denied.")
+            st.error("비밀번호가 틀렸습니다. 다시 시도해주세요.")
 
-    st.title("🔐 Access Restricted")
-    st.caption("Enter access key.")
-    st.text_input(
-        "Access Key", type="password", on_change=check_password, key="password_input"
-    )
+    # 1. 화면 중앙 정렬을 위한 컬럼 나누기 (선택 사항)
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        # 여기에 원하는 이미지 주소를 넣으세요!
+        # 예시: 귀여운 앵무새 이미지 (인터넷 링크)
+        # 만약 깃허브에 올린 파일이라면 "image.jpg" 처럼 파일명만 쓰면 됩니다.
+        st.image(
+            "yuri6.jpeg", caption="Welcome to Manseon's World", use_column_width=True
+        )
+
+        st.title("🔐 접근 제한 구역")
+        st.write("관계자 외 출입 금지! 암호를 대시오.")
+
+        st.text_input(
+            "비밀번호 입력",
+            type="password",
+            on_change=check_password,
+            key="password_input",
+        )
+
     st.stop()
 
 # --- 메인 앱 설정 ---
@@ -118,7 +134,7 @@ selected_config = type_map[config_choice]
 
 st.write("Request Interval Settings (sec)")
 interval_range = st.slider(
-    "Set random interval for stability", min_value=1, max_value=300, value=(3, 6)
+    "Set random interval for stability", min_value=1, max_value=300, value=(5, 10)
 )
 
 
