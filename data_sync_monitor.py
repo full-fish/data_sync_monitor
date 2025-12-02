@@ -24,17 +24,23 @@ if "password_correct" not in st.session_state:
         # 예시: 귀여운 앵무새 이미지 (인터넷 링크)
         # 만약 깃허브에 올린 파일이라면 "image.jpg" 처럼 파일명만 쓰면 됩니다.
         st.image(
-            "yuri6.jpeg", caption="Welcome to Manseon's World", use_column_width=True
+            "yuri6.jpeg",
+            caption="유리 파티 쥬리",
+            use_column_width=True,
         )
 
-        st.title("🔐 접근 제한 구역")
-        st.write("관계자 외 출입 금지! 암호를 대시오.")
+        st.title("🔐 Access Restricted")
+        st.caption("Enter access key.")
 
         st.text_input(
             "비밀번호 입력",
             type="password",
             on_change=check_password,
             key="password_input",
+        )
+        st.image(
+            "yuri4.jpeg",
+            use_column_width=True,
         )
 
     st.stop()
