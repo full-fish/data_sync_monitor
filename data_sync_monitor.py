@@ -17,7 +17,7 @@ if "password_correct" not in st.session_state:
             st.error("비밀번호가 틀렸습니다. 다시 시도해주세요.")
 
     # 1. 화면 중앙 정렬을 위한 컬럼 나누기 (선택 사항)
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1, 4, 1])
 
     with col2:
         # 여기에 원하는 이미지 주소를 넣으세요!
