@@ -17,7 +17,7 @@ if "password_correct" not in st.session_state:
             st.error("비밀번호가 틀렸습니다. 다시 시도해주세요.")
 
     # 1. 화면 중앙 정렬을 위한 컬럼 나누기 (선택 사항)
-    col1, col2, col3 = st.columns([1, 4, 1])
+    col1, col2, col3 = st.columns([2, 3, 2])
     with col3:
         st.image(
             "yuri4.jpeg",
@@ -27,11 +27,11 @@ if "password_correct" not in st.session_state:
         # 여기에 원하는 이미지 주소를 넣으세요!
         # 예시: 귀여운 앵무새 이미지 (인터넷 링크)
         # 만약 깃허브에 올린 파일이라면 "image.jpg" 처럼 파일명만 쓰면 됩니다.
-        st.image(
-            "yuri6.jpeg",
-            caption="유리 파리 쥬리",
-            use_column_width=True,
-        )
+        # st.image(
+        #     "yuri6.jpeg",
+        #     caption="유리 파리 쥬리",
+        #     use_column_width=True,
+        # )
 
         st.title("🔐 Access Restricted")
         st.caption("Enter access key.")
@@ -42,10 +42,10 @@ if "password_correct" not in st.session_state:
             on_change=check_password,
             key="password_input",
         )
-        st.image(
-            "yuri4.jpeg",
-            use_column_width=True,
-        )
+        # st.image(
+        #     "yuri4.jpeg",
+        #     use_column_width=True,
+        # )
 
     st.stop()
 
