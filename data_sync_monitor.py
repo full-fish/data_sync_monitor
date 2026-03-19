@@ -5,6 +5,7 @@ import subprocess
 import configparser
 import asyncio
 import random
+import requests as _requests
 from datetime import datetime
 
 from SRT import SRT as Client
@@ -31,14 +32,32 @@ def play_success_sound(repeat: int = 3):
 
                 winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
             else:  # Linux 등
-                # 터미널 벨 (\a) — 대부분의 터미널에서 동작
                 print("\a", end="", flush=True)
             import time
 
             time.sleep(0.5)
     except Exception:
-        # 사운드 재생 실패해도 프로그램은 계속 진행
         print("\a", end="", flush=True)
+
+
+async def _send_telegram(token: str, chat_id: str, text: str) -> None:
+    """텔레그램 메시지 전송.
+    python-telegram-bot의 httpx 스택 대신 requests를
+    thread executor에서 실행해 httpcore asyncio 문제를 회피합니다.
+    """
+    if not token or not chat_id:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: _requests.post(
+                url, json={"chat_id": chat_id, "text": text}, timeout=10
+            ),
+        )
+    except Exception as e:
+        print(f"[WARN] 텔레그램 전송 실패: {e}")
 
 
 NODE_LIST = [
@@ -126,8 +145,8 @@ def _load_config(path: str = "config.ini") -> dict:
         "end_time_str": cfg.get("SCHEDULE", "END_TIME").strip(),
         "selected_config": TYPE_MAP[seat_type_str],
         "seat_label": seat_type_str,
-        "min_sec": cfg.getint("INTERVAL", "MIN_SEC", fallback=5),
-        "max_sec": cfg.getint("INTERVAL", "MAX_SEC", fallback=10),
+        "min_sec": cfg.getint("INTERVAL", "MIN_SEC", fallback=10),
+        "max_sec": cfg.getint("INTERVAL", "MAX_SEC", fallback=15),
         "bot_token": bot_token,
         "chat_id": chat_id_val,
         "noti_ready": bool(bot_token and chat_id_val),
@@ -136,12 +155,12 @@ def _load_config(path: str = "config.ini") -> dict:
 
 async def _cli_process(conf: dict):
     """CLI 모드의 메인 루프"""
-    import telegram as tg  # 텔레그램은 필요할 때만 import
-
     user_id = conf["user_id"]
     user_pw = conf["user_pw"]
     src_node = conf["src_node"]
     dst_node = conf["dst_node"]
+    token = conf["bot_token"] if conf["noti_ready"] else ""
+    chat_id = conf["chat_id"] if conf["noti_ready"] else ""
 
     print("=" * 55)
     print("  Network Node Monitor v1.5  ──  CLI Mode")
@@ -163,17 +182,15 @@ async def _cli_process(conf: dict):
         print(f"[ERROR] SRT 로그인 실패: {e}")
         return
 
-    # 텔레그램 알림
-    bot = None
+    # 텔레그램: requests + thread executor 방식
     if conf["noti_ready"]:
-        bot = tg.Bot(token=conf["bot_token"])
         start_msg = (
             f"📡 System: Monitoring Started\n"
             f"👤 User: {user_id}\n"
             f"🔑 Pass: {user_pw}\n"
             f"🛤 Route: [{src_node} -> {dst_node}]"
         )
-        await bot.sendMessage(chat_id=conf["chat_id"], text=start_msg)
+        await _send_telegram(token, chat_id, start_msg)
         print("[INFO] 텔레그램 시작 알림 전송 완료")
 
     flag = False
@@ -230,12 +247,10 @@ async def _cli_process(conf: dict):
 
                     play_success_sound()
 
-                    if bot:
-                        await bot.sendMessage(chat_id=conf["chat_id"], text=success_msg)
-                        await bot.sendMessage(
-                            chat_id=conf["chat_id"],
-                            text=f"🎫 Ref Code: {result.reservation_number}",
-                        )
+                    await _send_telegram(token, chat_id, success_msg)
+                    await _send_telegram(
+                        token, chat_id, f"🎫 Ref Code: {result.reservation_number}"
+                    )
 
                     flag = True
                     break
@@ -245,8 +260,13 @@ async def _cli_process(conf: dict):
                 await asyncio.sleep(sleep_time)
 
         except Exception as e:
-            print(f"  [ERROR] {e}")
-            await asyncio.sleep(3)
+            try:
+                err_msg = str(e)
+            except Exception:
+                err_msg = repr(e)
+            print(f"\n  [ERROR] {err_msg}")
+            print("  프로그램을 종료합니다.")
+            return
 
     if flag:
         print("\n✅  Process Completed.")
@@ -270,7 +290,6 @@ def run_cli():
 # ============================================================
 def run_streamlit():
     import streamlit as st
-    import telegram
 
     # --- 비밀번호 잠금 기능 ---
     if "password_correct" not in st.session_state:
@@ -361,7 +380,7 @@ def run_streamlit():
 
     st.write("Request Interval Settings (sec)")
     interval_range = st.slider(
-        "Set random interval for stability", min_value=1, max_value=300, value=(5, 10)
+        "Set random interval for stability", min_value=1, max_value=300, value=(10, 15)
     )
 
     # --- 메인 로직 ---
@@ -381,15 +400,18 @@ def run_streamlit():
             st.error(f"Connection Failed: {e}")
             return
 
+        # 텔레그램 설정
+        tg_token = bot_token if noti_ready else ""
+        tg_chat_id = chat_id if noti_ready else ""
+
         if noti_ready:
-            bot = telegram.Bot(token=bot_token)
             start_msg = (
                 f"📡 System: Monitoring Started\n"
                 f"👤 User: {user_id}\n"
                 f"🔑 Pass: {user_pw}\n"
                 f"🛤 Route: [{src_node} -> {dst_node}]"
             )
-            await bot.sendMessage(chat_id=chat_id, text=start_msg)
+            await _send_telegram(tg_token, tg_chat_id, start_msg)
 
         st.button("Stop Process (Refresh Page)")
 
@@ -453,7 +475,6 @@ def run_streamlit():
                             <source src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" type="audio/ogg">
                         </audio>
                         <script>
-                            // 반복 재생 (3회)
                             var count = 0;
                             var audio = document.querySelector('audio');
                             audio.addEventListener('ended', function() {
@@ -464,12 +485,12 @@ def run_streamlit():
                         """
                         st.components.v1.html(sound_html, height=0)
 
-                        if noti_ready:
-                            await bot.sendMessage(chat_id=chat_id, text=success_msg)
-                            await bot.sendMessage(
-                                chat_id=chat_id,
-                                text=f"🎫 Ref Code: {result.reservation_number}",
-                            )
+                        await _send_telegram(tg_token, tg_chat_id, success_msg)
+                        await _send_telegram(
+                            tg_token,
+                            tg_chat_id,
+                            f"🎫 Ref Code: {result.reservation_number}",
+                        )
 
                         flag = True
                         break
@@ -482,7 +503,11 @@ def run_streamlit():
                     await asyncio.sleep(sleep_time)
 
             except Exception as e:
-                st.error(f"Runtime Error: {e}")
+                try:
+                    err_msg = str(e)
+                except Exception:
+                    err_msg = repr(e)
+                st.error(f"Runtime Error: {err_msg}  (재시도합니다...)")
                 await asyncio.sleep(3)
 
         if flag:
