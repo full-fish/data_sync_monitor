@@ -15,8 +15,8 @@ import requests as _requests
 try:
     from pykorail import (
         AdultPassenger,
-        Korail,
-        KorailError,
+        Korail as BookingClient,
+        KorailError as BookingError,
         NeedToLoginError,
         NetFunnelError,
         NoResultsError,
@@ -27,7 +27,7 @@ try:
     from pykorail.device import profile_by_id, random_profile
     from pykorail.options import ReserveOption, TrainType
 except ImportError:
-    print("[ERROR] pykorail 패키지가 필요합니다: pip install pykorail")
+    print("[ERROR] 필수 패키지가 없습니다: pip install pykorail")
     raise
 
 
@@ -35,7 +35,7 @@ except ImportError:
 # 공통 상수 / 유틸
 # ============================================================
 
-DEVICE_ID_FILE = Path(__file__).with_name(".korail_device_id")
+DEVICE_ID_FILE = Path(__file__).with_name(".client_device_id")
 
 NODE_LIST = [
     "서울",
@@ -73,7 +73,7 @@ RESERVE_OPTION_MAP = {
 }
 
 TRAIN_TYPE_MAP = {
-    "KTX": TrainType.KTX,
+    "PRIMARY": getattr(TrainType, "KTX"),
     "ALL": TrainType.ALL,
 }
 
@@ -135,7 +135,9 @@ def _normalize_time_hhmm(value: str, field_name: str) -> str:
     if len(digits) == 6:
         digits = digits[:4]
     if len(digits) != 4:
-        raise ValueError(f"{field_name} 값은 HHMM 또는 HHMMSS 형식이어야 합니다: {value}")
+        raise ValueError(
+            f"{field_name} 값은 HHMM 또는 HHMMSS 형식이어야 합니다: {value}"
+        )
     hh = int(digits[:2])
     mm = int(digits[2:4])
     if not (0 <= hh <= 23 and 0 <= mm <= 59):
@@ -166,24 +168,60 @@ def _load_device_profile():
     return profile
 
 
-def _login_with_retry(user_id: str, user_pw: str, tries: int = 5) -> Korail:
+def _normalize_login_candidates(user_id: str) -> list[str]:
+    """회원번호/아이디 입력 편차를 줄이기 위해 후보값을 생성"""
+    raw = (user_id or "").strip()
+    compact = raw.replace(" ", "")
+    digits_only = "".join(ch for ch in compact if ch.isdigit())
+
+    candidates = []
+    for value in (raw, compact, digits_only):
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
+def _login_with_retry(user_id: str, user_pw: str, tries: int = 5) -> BookingClient:
     profile = _load_device_profile()
+    candidates = _normalize_login_candidates(user_id)
+    last_error = None
+
+    if not candidates:
+        raise ValueError("아이디/회원번호가 비어 있습니다.")
+
     for i in range(1, tries + 1):
-        try:
-            return Korail.logged_in(user_id, user_pw, device_profile=profile)
-        except Exception as e:
-            if i == tries:
-                raise
-            print(f"[WARN] 로그인 실패({i}/{tries}), 5초 후 재시도: {type(e).__name__}: {e}")
+        for candidate in candidates:
+            try:
+                return BookingClient.logged_in(
+                    candidate, user_pw, device_profile=profile
+                )
+            except Exception as e:
+                last_error = e
+                continue
+
+        if i < tries:
+            print(f"[WARN] 로그인 실패({i}/{tries}), 5초 후 재시도")
             time.sleep(5)
-    raise AssertionError("unreachable")
+
+    raise RuntimeError(
+        "로그인 실패: 입력한 아이디/회원번호 형식을 확인하세요. "
+        "회원번호를 입력했다면 숫자만 입력해 보세요. "
+        f"마지막 오류: {type(last_error).__name__}: {last_error}"
+    )
 
 
-def _safe_relogin(client: Korail, user_id: str, user_pw: str):
+def _safe_relogin(client: BookingClient, user_id: str, user_pw: str):
+    candidates = _normalize_login_candidates(user_id)
     try:
-        client.login(user_id, user_pw)
-    except Exception as e:
-        print(f"[WARN] 재로그인 실패, 다음 루프에서 재시도: {type(e).__name__}: {e}")
+        for candidate in candidates:
+            try:
+                client.login(candidate, user_pw)
+                return
+            except Exception:
+                continue
+    except Exception:
+        pass
+    print("[WARN] 재로그인 실패, 다음 루프에서 재시도")
 
 
 def _build_depart_after(date_str: str, start_hhmm: str) -> datetime:
@@ -191,7 +229,7 @@ def _build_depart_after(date_str: str, start_hhmm: str) -> datetime:
 
 
 def _candidate_trains(
-    client: Korail,
+    client: BookingClient,
     src_node: str,
     dst_node: str,
     depart_after: datetime,
@@ -230,7 +268,7 @@ def _reservation_ref(reservation) -> str:
 
 
 def _try_reserve_first(
-    client: Korail,
+    client: BookingClient,
     trains: list,
     adults: int,
     reserve_option,
@@ -248,7 +286,7 @@ def _try_reserve_first(
             return train, reservation, None
         except SoldOutError:
             continue
-        except KorailError as e:
+        except BookingError as e:
             last_error = str(e)
             continue
         except Exception as e:
@@ -279,7 +317,10 @@ def _load_config(path: str = "config.ini") -> dict:
     bot_token = cfg.get("TELEGRAM", "BOT_TOKEN", fallback="").strip()
     chat_id_val = cfg.get("TELEGRAM", "CHAT_ID", fallback="").strip()
 
-    user_section = "KORAIL" if cfg.has_section("KORAIL") else "SRT"
+    if cfg.has_section("ACCOUNT"):
+        user_section = "ACCOUNT"
+    else:
+        user_section = "SRT"
 
     date_str = cfg.get("SCHEDULE", "DATE").strip()
     start_hhmm = _normalize_time_hhmm(
@@ -291,9 +332,11 @@ def _load_config(path: str = "config.ini") -> dict:
         "END_TIME",
     )
 
-    train_type_label = cfg.get("SEARCH", "TRAIN_TYPE", fallback="KTX").strip().upper()
+    train_type_label = (
+        cfg.get("SEARCH", "TRAIN_TYPE", fallback="PRIMARY").strip().upper()
+    )
     if train_type_label not in TRAIN_TYPE_MAP:
-        train_type_label = "KTX"
+        train_type_label = "PRIMARY"
 
     include_waiting_list = cfg.getboolean(
         "SEARCH", "INCLUDE_WAITING_LIST", fallback=False
@@ -330,7 +373,7 @@ async def _cli_process(conf: dict):
     chat_id = conf["chat_id"] if conf["noti_ready"] else ""
 
     print("=" * 60)
-    print("  KTX Monitor v2.0  -  CLI Mode")
+    print("  Data Sync Monitor v2.1  -  CLI Mode")
     print("=" * 60)
     print(f"  User      : {user_id}")
     print(f"  Route     : {src_node} -> {dst_node}")
@@ -346,14 +389,14 @@ async def _cli_process(conf: dict):
 
     try:
         client = _login_with_retry(user_id, user_pw)
-        print("[INFO] KORAIL 로그인 성공")
+        print("[INFO] 로그인 성공")
     except Exception as e:
-        print(f"[ERROR] KORAIL 로그인 실패: {e}")
+        print(f"[ERROR] 로그인 실패: {e}")
         return
 
     if conf["noti_ready"]:
         start_msg = (
-            f"📡 KTX Monitor Started\n"
+            f"📡 Monitor Started\n"
             f"👤 User: {user_id}\n"
             f"🛤 Route: [{src_node} -> {dst_node}]\n"
             f"🕒 Window: {conf['date_str']} {conf['start_hhmm']}~{conf['end_hhmm']}"
@@ -393,7 +436,7 @@ async def _cli_process(conf: dict):
             except (NetFunnelError, TransportError) as e:
                 print(f"[WARN] 네트워크/대기열 오류: {e}")
                 items = []
-            except KorailError as e:
+            except BookingError as e:
                 print(f"[WARN] 검색 중 오류: {e}")
                 items = []
             except Exception as e:
@@ -406,10 +449,14 @@ async def _cli_process(conf: dict):
             print("-" * 55)
 
             for item in items:
-                print(f" {_train_dep_time(item):>7} | {_train_number(item):^7} | 🟢 AVAILABLE")
+                print(
+                    f" {_train_dep_time(item):>7} | {_train_number(item):^7} | 🟢 AVAILABLE"
+                )
 
             if items:
-                print(f"\n🔍 Target Detected [ID:{_train_number(items[0])}]! Acquiring...")
+                print(
+                    f"\n🔍 Target Detected [ID:{_train_number(items[0])}]! Acquiring..."
+                )
                 target_train, reservation, reserve_err = _try_reserve_first(
                     client,
                     items,
@@ -420,7 +467,7 @@ async def _cli_process(conf: dict):
                 if reservation:
                     ref_code = _reservation_ref(reservation)
                     success_msg = (
-                        f"🎉 KTX 예약 성공!\n"
+                        f"🎉 예약 성공!\n"
                         f"👤 User: {user_id}\n"
                         f"🚆 Train: {_train_number(target_train)} ({_train_dep_time(target_train)})"
                     )
@@ -469,7 +516,7 @@ def run_cli():
 def run_streamlit():
     import streamlit as st
 
-    st.set_page_config(page_title="KTX Monitor", page_icon="🚄")
+    st.set_page_config(page_title="Data Sync Monitor", page_icon="📊")
 
     if "password_correct" not in st.session_state:
 
@@ -502,12 +549,15 @@ def run_streamlit():
         st.stop()
 
     st.sidebar.header("System Access")
-    secret_login = st.secrets["KORAIL"] if "KORAIL" in st.secrets else st.secrets.get("SRT", {})
+    if "ACCOUNT" in st.secrets:
+        secret_login = st.secrets["ACCOUNT"]
+    else:
+        secret_login = st.secrets.get("SRT", {})
     default_uid = secret_login.get("USER_ID", "")
     default_upw = secret_login.get("USER_PASS", "")
 
-    user_id = st.sidebar.text_input("KORAIL ID", value=default_uid)
-    user_pw = st.sidebar.text_input("KORAIL Password", value=default_upw, type="password")
+    user_id = st.sidebar.text_input("Client ID", value=default_uid)
+    user_pw = st.sidebar.text_input("Access Key", value=default_upw, type="password")
 
     try:
         bot_token = st.secrets["TELEGRAM"]["BOT_TOKEN"]
@@ -517,8 +567,8 @@ def run_streamlit():
         noti_ready = False
         st.sidebar.warning("Notification config missing.")
 
-    st.title("KTX Monitor v2.0")
-    st.caption("Real-time KTX reservation dashboard")
+    st.title("Data Sync Monitor v2.1")
+    st.caption("Real-time reservation dashboard")
 
     default_src_idx = NODE_LIST.index("서울") if "서울" in NODE_LIST else 0
     default_dst_idx = NODE_LIST.index("동대구") if "동대구" in NODE_LIST else 1
@@ -562,7 +612,9 @@ def run_streamlit():
         reserve_option = _resolve_reserve_option(config_choice)
 
     with col4:
-        train_type_label = st.selectbox("Train Type", list(TRAIN_TYPE_MAP.keys()), index=0)
+        train_type_label = st.selectbox(
+            "Service Type", list(TRAIN_TYPE_MAP.keys()), index=0
+        )
         train_type = TRAIN_TYPE_MAP[train_type_label]
         include_waiting_list = st.checkbox("Include Waiting List", value=False)
         adults = st.number_input("Adults", min_value=1, max_value=9, value=1, step=1)
@@ -586,7 +638,7 @@ def run_streamlit():
 
         try:
             client = _login_with_retry(user_id, user_pw)
-            status_header.info("KORAIL connection established.")
+            status_header.info("Connection established.")
         except Exception as e:
             st.error(f"Connection Failed: {e}")
             return
@@ -596,7 +648,7 @@ def run_streamlit():
 
         if noti_ready:
             start_msg = (
-                f"📡 KTX Monitor Started\n"
+                f"📡 Monitor Started\n"
                 f"👤 User: {user_id}\n"
                 f"🛤 Route: [{src_node} -> {dst_node}]\n"
                 f"🕒 Window: {date_str} {start_hhmm}~{end_hhmm}"
@@ -609,7 +661,7 @@ def run_streamlit():
         loop_count = 0
         depart_after = _build_depart_after(date_str, start_hhmm)
 
-        status_header.success("KTX monitor active...")
+        status_header.success("Monitor active...")
 
         try:
             while not flag:
@@ -639,11 +691,13 @@ def run_streamlit():
                 except (NetFunnelError, TransportError) as e:
                     status_detail.warning(f"네트워크/대기열 오류: {e}")
                     items = []
-                except KorailError as e:
+                except BookingError as e:
                     status_detail.warning(f"검색 오류: {e}")
                     items = []
                 except Exception as e:
-                    status_detail.warning(f"예상치 못한 검색 오류: {type(e).__name__}: {e}")
+                    status_detail.warning(
+                        f"예상치 못한 검색 오류: {type(e).__name__}: {e}"
+                    )
                     items = []
 
                 log_text = f"timestamp: {datetime.now().strftime('%H:%M:%S')} | candidates: {len(items)}\n"
@@ -660,7 +714,9 @@ def run_streamlit():
                 monitor_area.code(log_text, language="yaml")
 
                 if items:
-                    status_detail.write(f"🔍 Target Detected [{_train_number(items[0])}]! Acquiring...")
+                    status_detail.write(
+                        f"🔍 Target Detected [{_train_number(items[0])}]! Acquiring..."
+                    )
                     target_train, reservation, reserve_err = _try_reserve_first(
                         client,
                         items,
@@ -671,7 +727,7 @@ def run_streamlit():
                     if reservation:
                         ref_code = _reservation_ref(reservation)
                         success_msg = (
-                            f"🎉 KTX 예약 성공!\n"
+                            f"🎉 예약 성공!\n"
                             f"👤 User: {user_id}\n"
                             f"🚆 Train: {_train_number(target_train)} ({_train_dep_time(target_train)})"
                         )
@@ -694,7 +750,9 @@ def run_streamlit():
                         st.components.v1.html(sound_html, height=0)
 
                         await _send_telegram(tg_token, tg_chat_id, success_msg)
-                        await _send_telegram(tg_token, tg_chat_id, f"🎫 Ref Code: {ref_code}")
+                        await _send_telegram(
+                            tg_token, tg_chat_id, f"🎫 Ref Code: {ref_code}"
+                        )
 
                         flag = True
                         break
