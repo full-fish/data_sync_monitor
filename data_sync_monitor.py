@@ -307,7 +307,7 @@ def run_streamlit():
             st.image(
                 "yuri6.jpeg",
                 caption="유리 파리 쥬리",
-                use_column_width=True,
+                use_container_width=True,
             )
 
             st.title("🔐 Access Restricted")
