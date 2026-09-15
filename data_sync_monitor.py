@@ -181,7 +181,42 @@ def _normalize_login_candidates(user_id: str) -> list[str]:
     return candidates
 
 
+def _clean_password(user_pw: str) -> str:
+    """복붙 과정에서 들어간 공백/개행을 제거"""
+    return (user_pw or "").strip()
+
+
+def _load_account_defaults_from_files() -> tuple[str, str]:
+    """Streamlit에서 secrets가 없을 때 로컬 설정 파일 계정값을 기본값으로 사용"""
+    cfg = configparser.ConfigParser()
+    candidates = ["config.ini", "_config.ini"]
+
+    found = None
+    for path in candidates:
+        if os.path.exists(path):
+            found = path
+            break
+
+    if not found:
+        return "", ""
+
+    try:
+        cfg.read(found, encoding="utf-8")
+    except Exception:
+        return "", ""
+
+    for section in ("ACCOUNT", "KORAIL", "SRT"):
+        if cfg.has_section(section):
+            return (
+                cfg.get(section, "USER_ID", fallback="").strip(),
+                cfg.get(section, "USER_PASS", fallback="").strip(),
+            )
+
+    return "", ""
+
+
 def _login_with_retry(user_id: str, user_pw: str, tries: int = 5) -> BookingClient:
+    user_pw = _clean_password(user_pw)
     profile = _load_device_profile()
     candidates = _normalize_login_candidates(user_id)
     last_error = None
@@ -211,6 +246,7 @@ def _login_with_retry(user_id: str, user_pw: str, tries: int = 5) -> BookingClie
 
 
 def _safe_relogin(client: BookingClient, user_id: str, user_pw: str):
+    user_pw = _clean_password(user_pw)
     candidates = _normalize_login_candidates(user_id)
     try:
         for candidate in candidates:
@@ -549,12 +585,15 @@ def run_streamlit():
         st.stop()
 
     st.sidebar.header("System Access")
+    file_uid, file_upw = _load_account_defaults_from_files()
+
     if "ACCOUNT" in st.secrets:
         secret_login = st.secrets["ACCOUNT"]
     else:
         secret_login = st.secrets.get("SRT", {})
-    default_uid = secret_login.get("USER_ID", "")
-    default_upw = secret_login.get("USER_PASS", "")
+
+    default_uid = secret_login.get("USER_ID", file_uid)
+    default_upw = secret_login.get("USER_PASS", file_upw)
 
     user_id = st.sidebar.text_input("Client ID", value=default_uid)
     user_pw = st.sidebar.text_input("Access Key", value=default_upw, type="password")
@@ -632,12 +671,15 @@ def run_streamlit():
         monitor_area = st.empty()
         status_detail = st.empty()
 
-        if not user_id or not user_pw:
+        user_id_clean = (user_id or "").strip()
+        user_pw_clean = _clean_password(user_pw)
+
+        if not user_id_clean or not user_pw_clean:
             st.error("Check credentials.")
             return
 
         try:
-            client = _login_with_retry(user_id, user_pw)
+            client = _login_with_retry(user_id_clean, user_pw_clean)
             status_header.info("Connection established.")
         except Exception as e:
             st.error(f"Connection Failed: {e}")
@@ -649,7 +691,7 @@ def run_streamlit():
         if noti_ready:
             start_msg = (
                 f"📡 Monitor Started\n"
-                f"👤 User: {user_id}\n"
+                f"👤 User: {user_id_clean}\n"
                 f"🛤 Route: [{src_node} -> {dst_node}]\n"
                 f"🕒 Window: {date_str} {start_hhmm}~{end_hhmm}"
             )
@@ -685,7 +727,7 @@ def run_streamlit():
                     return
                 except NeedToLoginError:
                     status_detail.warning("세션 만료, 재로그인 시도")
-                    _safe_relogin(client, user_id, user_pw)
+                    _safe_relogin(client, user_id_clean, user_pw_clean)
                     await asyncio.sleep(1)
                     continue
                 except (NetFunnelError, TransportError) as e:
@@ -728,7 +770,7 @@ def run_streamlit():
                         ref_code = _reservation_ref(reservation)
                         success_msg = (
                             f"🎉 예약 성공!\n"
-                            f"👤 User: {user_id}\n"
+                            f"👤 User: {user_id_clean}\n"
                             f"🚆 Train: {_train_number(target_train)} ({_train_dep_time(target_train)})"
                         )
                         st.balloons()
