@@ -186,31 +186,24 @@ def _clean_password(user_pw: str) -> str:
     return (user_pw or "").strip()
 
 
-def _load_account_defaults_from_files() -> tuple[str, str]:
-    """Streamlit에서 secrets가 없을 때 로컬 설정 파일 계정값을 기본값으로 사용"""
+def _load_account_from_config_ini() -> tuple[str, str]:
+    """config.ini에서 계정 정보를 읽어 반환"""
     cfg = configparser.ConfigParser()
-    candidates = ["config.ini", "_config.ini"]
-
-    found = None
-    for path in candidates:
-        if os.path.exists(path):
-            found = path
-            break
-
-    if not found:
+    path = "config.ini"
+    if not os.path.exists(path):
         return "", ""
 
     try:
-        cfg.read(found, encoding="utf-8")
+        cfg.read(path, encoding="utf-8")
     except Exception:
         return "", ""
 
     for section in ("ACCOUNT", "KORAIL", "SRT"):
         if cfg.has_section(section):
-            return (
-                cfg.get(section, "USER_ID", fallback="").strip(),
-                cfg.get(section, "USER_PASS", fallback="").strip(),
-            )
+            uid = cfg.get(section, "USER_ID", fallback="").strip()
+            upw = cfg.get(section, "USER_PASS", fallback="").strip()
+            if uid or upw:
+                return uid, upw
 
     return "", ""
 
@@ -585,18 +578,8 @@ def run_streamlit():
         st.stop()
 
     st.sidebar.header("System Access")
-    file_uid, file_upw = _load_account_defaults_from_files()
-
-    if "ACCOUNT" in st.secrets:
-        secret_login = st.secrets["ACCOUNT"]
-    else:
-        secret_login = st.secrets.get("SRT", {})
-
-    default_uid = secret_login.get("USER_ID", file_uid)
-    default_upw = secret_login.get("USER_PASS", file_upw)
-
-    user_id = st.sidebar.text_input("Client ID", value=default_uid)
-    user_pw = st.sidebar.text_input("Access Key", value=default_upw, type="password")
+    user_id = st.sidebar.text_input("Client ID", value="")
+    user_pw = st.sidebar.text_input("Access Key", value="", type="password")
 
     try:
         bot_token = st.secrets["TELEGRAM"]["BOT_TOKEN"]
@@ -674,8 +657,14 @@ def run_streamlit():
         user_id_clean = (user_id or "").strip()
         user_pw_clean = _clean_password(user_pw)
 
+        cfg_uid, cfg_upw = _load_account_from_config_ini()
+        if not user_id_clean:
+            user_id_clean = cfg_uid
+        if not user_pw_clean:
+            user_pw_clean = _clean_password(cfg_upw)
+
         if not user_id_clean or not user_pw_clean:
-            st.error("Check credentials.")
+            st.error("Check credentials. (입력값 우선, 비어 있으면 config.ini 사용)")
             return
 
         try:
